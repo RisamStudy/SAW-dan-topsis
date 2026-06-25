@@ -1,66 +1,204 @@
 import streamlit as st
-import sqlite3
+import mysql.connector
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import os
 
-# ==================================
-# DATABASE
-# ==================================
+# Load environmental variables from .env if present
+if os.path.exists(".env"):
+    with open(".env") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                key, val = line.split("=", 1)
+                os.environ[key.strip()] = val.strip()
 
-conn = sqlite3.connect("database.db", check_same_thread=False)
-cursor = conn.cursor()
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = int(os.environ.get("DB_PORT", 3306))
+DB_USER = os.environ.get("DB_USER", "root")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_DATABASE = os.environ.get("DB_DATABASE", "spk_saw_topsis")
 
-cursor.execute("""
+# Step 1: Connect to MySQL Server to ensure the database exists
+try:
+    init_conn = mysql.connector.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD
+    )
+    init_cursor = init_conn.cursor()
+    init_cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_DATABASE}")
+    init_conn.commit()
+    init_cursor.close()
+    init_conn.close()
+except Exception as e:
+    st.error(f"Gagal menghubungkan ke MySQL Server: {e}")
+    st.info("Pastikan MySQL server sudah berjalan dan kredensial di file `.env` sudah benar.")
+    st.stop()
+
+# Step 2: Establish the persistent connection to the target database
+try:
+    conn = mysql.connector.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_DATABASE
+    )
+except Exception as e:
+    st.error(f"Gagal menghubungkan ke database MySQL `{DB_DATABASE}`: {e}")
+    st.stop()
+
+# Helpers for execution to handle auto-reconnect and convert NumPy type parameters
+def execute_write(query, params=None):
+    if params:
+        params = tuple(
+            int(p) if isinstance(p, (np.int64, np.int32))
+            else float(p) if isinstance(p, (np.float64, np.float32))
+            else p
+            for p in params
+        )
+    conn.ping(reconnect=True)
+    cur = conn.cursor()
+    cur.execute(query, params)
+    conn.commit()
+    cur.close()
+
+def read_sql(query, params=None):
+    if params:
+        params = tuple(
+            int(p) if isinstance(p, (np.int64, np.int32))
+            else float(p) if isinstance(p, (np.float64, np.float32))
+            else p
+            for p in params
+        )
+    conn.ping(reconnect=True)
+    cur = conn.cursor()
+    cur.execute(query, params)
+    columns = [col[0] for col in cur.description]
+    data = cur.fetchall()
+    cur.close()
+    return pd.DataFrame(data, columns=columns)
+
+# Initialize tables
+execute_write("""
 CREATE TABLE IF NOT EXISTS criteria(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    weight REAL,
-    type TEXT
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255),
+    weight DOUBLE,
+    type VARCHAR(50)
 )
 """)
 
-cursor.execute("""
+execute_write("""
 CREATE TABLE IF NOT EXISTS alternatives(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255)
 )
 """)
 
-cursor.execute("""
+execute_write("""
 CREATE TABLE IF NOT EXISTS scores(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    alternative_id INTEGER,
-    criteria_id INTEGER,
-    value REAL
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    alternative_id INT,
+    criteria_id INT,
+    value DOUBLE
 )
 """)
 
-cursor.execute("""
+execute_write("""
 CREATE TABLE IF NOT EXISTS results(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    method TEXT,
-    alternative TEXT,
-    score REAL,
-    ranking INTEGER,
-    created_at TEXT
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    method VARCHAR(50),
+    alternative VARCHAR(255),
+    score DOUBLE,
+    ranking INT,
+    created_at VARCHAR(50)
 )
 """)
-
-conn.commit()
-
-# ==================================
-# HELPER
-# ==================================
 
 def get_criteria():
-    return pd.read_sql("SELECT * FROM criteria", conn)
+    df = read_sql("SELECT * FROM criteria")
+    if not df.empty:
+        df["id"] = df["id"].astype(int)
+        df["weight"] = df["weight"].astype(float)
+    return df
 
 def get_alternatives():
-    return pd.read_sql("SELECT * FROM alternatives", conn)
+    df = read_sql("SELECT * FROM alternatives")
+    if not df.empty:
+        df["id"] = df["id"].astype(int)
+    return df
 
 def get_scores():
-    return pd.read_sql("SELECT * FROM scores", conn)
+    df = read_sql("SELECT * FROM scores")
+    if not df.empty:
+        df["id"] = df["id"].astype(int)
+        df["alternative_id"] = df["alternative_id"].astype(int)
+        df["criteria_id"] = df["criteria_id"].astype(int)
+        df["value"] = df["value"].astype(float)
+    return df
+
+def tampilkan_tabel_ranking(ranking):
+    df_display = ranking[["ranking", "name", "score"]].copy()
+    df_display.columns = ["Peringkat", "Nama Alternatif", "Skor"]
+    
+    html_table = """
+    <style>
+        .custom-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Inter', sans-serif;
+            font-size: 20px; /* Font size enlarged */
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+        .custom-table th {
+            background-color: rgba(46, 139, 87, 0.15);
+            color: #2E8B57;
+            border-bottom: 3px solid #2E8B57;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: bold;
+        }
+        .custom-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+        }
+        .custom-table tr:hover {
+            background-color: rgba(128, 128, 128, 0.05);
+        }
+        .rank-1 {
+            font-weight: bold;
+            background-color: rgba(255, 215, 0, 0.15) !important;
+            border-left: 5px solid #FFD700;
+        }
+    </style>
+    <table class="custom-table">
+        <thead>
+            <tr>
+                <th>Peringkat</th>
+                <th>Nama Alternatif</th>
+                <th>Skor</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    for _, row in df_display.iterrows():
+        row_class = "rank-1" if row["Peringkat"] == 1 else ""
+        formatted_score = f"{row['Skor']:.4f}"
+        html_table += f"<tr class='{row_class}'>"
+        if row['Peringkat'] == 1:
+            html_table += "<td> <b>1 (Terbaik)</b></td>"
+        else:
+            html_table += f"<td>{row['Peringkat']}</td>"
+        html_table += f"<td>{row['Nama Alternatif']}</td>"
+        html_table += f"<td>{formatted_score}</td>"
+        html_table += "</tr>"
+    html_table += "</tbody></table>"
+    st.markdown(html_table, unsafe_allow_html=True)
 
 # ==================================
 # SIDEBAR
@@ -95,11 +233,10 @@ if menu == "Kriteria":
         tipe = st.selectbox("Tipe", ["benefit", "cost"])
         submit = st.form_submit_button("Tambah")
         if submit and nama:
-            cursor.execute(
-                "INSERT INTO criteria(name,weight,type) VALUES(?,?,?)",
+            execute_write(
+                "INSERT INTO criteria(name,weight,type) VALUES(%s,%s,%s)",
                 (nama, bobot, tipe)
             )
-            conn.commit()
             st.success("Kriteria ditambahkan")
             st.rerun()
 
@@ -125,18 +262,16 @@ if menu == "Kriteria":
                         delete = st.form_submit_button("Hapus", type="primary")
 
                 if update:
-                    cursor.execute(
-                        "UPDATE criteria SET name=?, weight=?, type=? WHERE id=?",
+                    execute_write(
+                        "UPDATE criteria SET name=%s, weight=%s, type=%s WHERE id=%s",
                         (new_name, new_bobot, new_tipe, row["id"])
                     )
-                    conn.commit()
                     st.success("Kriteria diperbarui")
                     st.rerun()
 
                 if delete:
-                    cursor.execute("DELETE FROM criteria WHERE id=?", (row["id"],))
-                    cursor.execute("DELETE FROM scores WHERE criteria_id=?", (row["id"],))
-                    conn.commit()
+                    execute_write("DELETE FROM criteria WHERE id=%s", (row["id"],))
+                    execute_write("DELETE FROM scores WHERE criteria_id=%s", (row["id"],))
                     st.success("Kriteria dihapus")
                     st.rerun()
 
@@ -153,11 +288,10 @@ elif menu == "Alternatif":
         nama = st.text_input("Nama Alternatif")
         submit = st.form_submit_button("Tambah")
         if submit and nama:
-            cursor.execute(
-                "INSERT INTO alternatives(name) VALUES(?)",
+            execute_write(
+                "INSERT INTO alternatives(name) VALUES(%s)",
                 (nama,)
             )
-            conn.commit()
             st.success("Alternatif ditambahkan")
             st.rerun()
 
@@ -180,18 +314,16 @@ elif menu == "Alternatif":
                         delete = st.form_submit_button("Hapus", type="primary")
 
                 if update:
-                    cursor.execute(
-                        "UPDATE alternatives SET name=? WHERE id=?",
+                    execute_write(
+                        "UPDATE alternatives SET name=%s WHERE id=%s",
                         (new_name, row["id"])
                     )
-                    conn.commit()
                     st.success("Alternatif diperbarui")
                     st.rerun()
 
                 if delete:
-                    cursor.execute("DELETE FROM alternatives WHERE id=?", (row["id"],))
-                    cursor.execute("DELETE FROM scores WHERE alternative_id=?", (row["id"],))
-                    conn.commit()
+                    execute_write("DELETE FROM alternatives WHERE id=%s", (row["id"],))
+                    execute_write("DELETE FROM scores WHERE alternative_id=%s", (row["id"],))
                     st.success("Alternatif dihapus")
                     st.rerun()
 
@@ -224,7 +356,7 @@ elif menu == "Input Nilai":
             current_value = float(existing_row["value"].iloc[0]) if has_value else 0.0
 
             with st.expander(
-                f"{row['name']} — {'✅ ' + str(current_value) if has_value else '➕ Belum diisi'}"
+                f"{row['name']} — {str(current_value) if has_value else 'Belum diisi'}"
             ):
                 with st.form(f"form_nilai_{alt_id}_{cid}"):
                     nilai = st.number_input(
@@ -244,23 +376,21 @@ elif menu == "Input Nilai":
                 if simpan:
                     if has_value:
                         score_id = int(existing_row["id"].iloc[0])
-                        cursor.execute(
-                            "UPDATE scores SET value=? WHERE id=?",
+                        execute_write(
+                            "UPDATE scores SET value=%s WHERE id=%s",
                             (nilai, score_id)
                         )
                     else:
-                        cursor.execute(
-                            "INSERT INTO scores(alternative_id,criteria_id,value) VALUES(?,?,?)",
+                        execute_write(
+                            "INSERT INTO scores(alternative_id,criteria_id,value) VALUES(%s,%s,%s)",
                             (alt_id, cid, nilai)
                         )
-                    conn.commit()
                     st.success("Tersimpan")
                     st.rerun()
 
                 if hapus and has_value:
                     score_id = int(existing_row["id"].iloc[0])
-                    cursor.execute("DELETE FROM scores WHERE id=?", (score_id,))
-                    conn.commit()
+                    execute_write("DELETE FROM scores WHERE id=%s", (score_id,))
                     st.success("Nilai dihapus")
                     st.rerun()
 
@@ -305,7 +435,7 @@ elif menu == "SAW":
         final = result.sum(axis=1)
 
         ranking = pd.DataFrame({
-            "alternative_id": final.index,
+            "alternative_id": final.index.values,
             "score": final.values
         })
 
@@ -325,19 +455,13 @@ elif menu == "SAW":
             right_on="id"
         )
 
-        st.dataframe(
-            ranking[[
-                "name",
-                "score",
-                "ranking"
-            ]]
-        )
+        tampilkan_tabel_ranking(ranking)
 
         if st.button("Simpan Hasil SAW"):
 
             for _, row in ranking.iterrows():
 
-                cursor.execute("""
+                execute_write("""
                 INSERT INTO results(
                 method,
                 alternative,
@@ -345,7 +469,7 @@ elif menu == "SAW":
                 ranking,
                 created_at
                 )
-                VALUES(?,?,?,?,?)
+                VALUES(%s,%s,%s,%s,%s)
                 """,
                 (
                     "SAW",
@@ -356,8 +480,6 @@ elif menu == "SAW":
                         "%Y-%m-%d %H:%M:%S"
                     )
                 ))
-
-            conn.commit()
 
             st.success("Hasil disimpan")
 
@@ -440,8 +562,8 @@ elif menu == "TOPSIS":
         )
 
         ranking = pd.DataFrame({
-            "alternative_id": matrix.index,
-            "score": pref
+            "alternative_id": matrix.index.values,
+            "score": pref.values
         })
 
         ranking = ranking.sort_values(
@@ -460,17 +582,13 @@ elif menu == "TOPSIS":
             right_on="id"
         )
 
-        st.dataframe(
-            ranking[
-                ["name","score","ranking"]
-            ]
-        )
+        tampilkan_tabel_ranking(ranking)
 
         if st.button("Simpan Hasil TOPSIS"):
 
             for _, row in ranking.iterrows():
 
-                cursor.execute("""
+                execute_write("""
                 INSERT INTO results(
                 method,
                 alternative,
@@ -478,7 +596,7 @@ elif menu == "TOPSIS":
                 ranking,
                 created_at
                 )
-                VALUES(?,?,?,?,?)
+                VALUES(%s,%s,%s,%s,%s)
                 """,
                 (
                     "TOPSIS",
@@ -490,8 +608,6 @@ elif menu == "TOPSIS":
                     )
                 ))
 
-            conn.commit()
-
             st.success("Hasil disimpan")
 
 # ==================================
@@ -502,9 +618,8 @@ elif menu == "Riwayat":
 
     st.title("Riwayat Perhitungan")
 
-    data = pd.read_sql(
-        "SELECT * FROM results ORDER BY id DESC",
-        conn
+    data = read_sql(
+        "SELECT * FROM results ORDER BY id DESC"
     )
 
     st.dataframe(data)
