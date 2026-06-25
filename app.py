@@ -88,22 +88,57 @@ if menu == "Kriteria":
 
     st.title("Data Kriteria")
 
+    # Tambah
     with st.form("form_kriteria"):
         nama = st.text_input("Nama Kriteria")
         bobot = st.number_input("Bobot", min_value=0.0)
         tipe = st.selectbox("Tipe", ["benefit", "cost"])
-
-        submit = st.form_submit_button("Simpan")
-
-        if submit:
+        submit = st.form_submit_button("Tambah")
+        if submit and nama:
             cursor.execute(
                 "INSERT INTO criteria(name,weight,type) VALUES(?,?,?)",
-                (nama,bobot,tipe)
+                (nama, bobot, tipe)
             )
             conn.commit()
             st.success("Kriteria ditambahkan")
+            st.rerun()
 
-    st.dataframe(get_criteria())
+    st.divider()
+
+    criteria = get_criteria()
+    st.subheader("Daftar Kriteria")
+
+    if len(criteria) == 0:
+        st.info("Belum ada data kriteria")
+    else:
+        for _, row in criteria.iterrows():
+            with st.expander(f"{row['name']} | Bobot: {row['weight']} | Tipe: {row['type']}"):
+                with st.form(f"edit_kriteria_{row['id']}"):
+                    new_name = st.text_input("Nama", value=row["name"])
+                    new_bobot = st.number_input("Bobot", min_value=0.0, value=float(row["weight"]))
+                    new_tipe = st.selectbox("Tipe", ["benefit", "cost"],
+                                            index=0 if row["type"] == "benefit" else 1)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        update = st.form_submit_button("Update")
+                    with col2:
+                        delete = st.form_submit_button("Hapus", type="primary")
+
+                if update:
+                    cursor.execute(
+                        "UPDATE criteria SET name=?, weight=?, type=? WHERE id=?",
+                        (new_name, new_bobot, new_tipe, row["id"])
+                    )
+                    conn.commit()
+                    st.success("Kriteria diperbarui")
+                    st.rerun()
+
+                if delete:
+                    cursor.execute("DELETE FROM criteria WHERE id=?", (row["id"],))
+                    cursor.execute("DELETE FROM scores WHERE criteria_id=?", (row["id"],))
+                    conn.commit()
+                    st.success("Kriteria dihapus")
+                    st.rerun()
 
 # ==================================
 # ALTERNATIF
@@ -113,21 +148,52 @@ elif menu == "Alternatif":
 
     st.title("Data Alternatif")
 
+    # Tambah
     with st.form("form_alt"):
         nama = st.text_input("Nama Alternatif")
-
-        submit = st.form_submit_button("Simpan")
-
-        if submit:
+        submit = st.form_submit_button("Tambah")
+        if submit and nama:
             cursor.execute(
                 "INSERT INTO alternatives(name) VALUES(?)",
                 (nama,)
             )
             conn.commit()
-
             st.success("Alternatif ditambahkan")
+            st.rerun()
 
-    st.dataframe(get_alternatives())
+    st.divider()
+
+    alternatives = get_alternatives()
+    st.subheader("Daftar Alternatif")
+
+    if len(alternatives) == 0:
+        st.info("Belum ada data alternatif")
+    else:
+        for _, row in alternatives.iterrows():
+            with st.expander(f"{row['name']}"):
+                with st.form(f"edit_alt_{row['id']}"):
+                    new_name = st.text_input("Nama", value=row["name"])
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        update = st.form_submit_button("Update")
+                    with col2:
+                        delete = st.form_submit_button("Hapus", type="primary")
+
+                if update:
+                    cursor.execute(
+                        "UPDATE alternatives SET name=? WHERE id=?",
+                        (new_name, row["id"])
+                    )
+                    conn.commit()
+                    st.success("Alternatif diperbarui")
+                    st.rerun()
+
+                if delete:
+                    cursor.execute("DELETE FROM alternatives WHERE id=?", (row["id"],))
+                    cursor.execute("DELETE FROM scores WHERE alternative_id=?", (row["id"],))
+                    conn.commit()
+                    st.success("Alternatif dihapus")
+                    st.rerun()
 
 # ==================================
 # INPUT NILAI
@@ -140,49 +206,63 @@ elif menu == "Input Nilai":
     criteria = get_criteria()
     alternatives = get_alternatives()
 
-    if len(criteria)==0 or len(alternatives)==0:
+    if len(criteria) == 0 or len(alternatives) == 0:
         st.warning("Isi kriteria dan alternatif terlebih dahulu")
     else:
+        alt = st.selectbox("Alternatif", alternatives["name"])
+        alt_id = alternatives[alternatives["name"] == alt]["id"].iloc[0]
 
-        alt = st.selectbox(
-            "Alternatif",
-            alternatives["name"]
-        )
+        scores = get_scores()
+        existing = scores[scores["alternative_id"] == alt_id]
 
-        alt_id = alternatives[
-            alternatives["name"]==alt
-        ]["id"].iloc[0]
+        st.subheader(f"Nilai untuk: {alt}")
 
         for _, row in criteria.iterrows():
+            cid = row["id"]
+            existing_row = existing[existing["criteria_id"] == cid]
+            has_value = len(existing_row) > 0
+            current_value = float(existing_row["value"].iloc[0]) if has_value else 0.0
 
-            nilai = st.number_input(
-                f"{row['name']}",
-                min_value=0.0,
-                key=row["id"]
-            )
-
-            if st.button(
-                f"Simpan {row['name']}",
-                key=f"btn{row['id']}"
+            with st.expander(
+                f"{row['name']} — {'✅ ' + str(current_value) if has_value else '➕ Belum diisi'}"
             ):
+                with st.form(f"form_nilai_{alt_id}_{cid}"):
+                    nilai = st.number_input(
+                        "Nilai", min_value=0.0, value=current_value,
+                        key=f"input_{alt_id}_{cid}"
+                    )
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        simpan = st.form_submit_button(
+                            "Update" if has_value else "Simpan"
+                        )
+                    with col2:
+                        hapus = st.form_submit_button(
+                            "Hapus", type="primary", disabled=not has_value
+                        )
 
-                cursor.execute("""
-                INSERT INTO scores(
-                alternative_id,
-                criteria_id,
-                value
-                )
-                VALUES(?,?,?)
-                """,
-                (
-                    alt_id,
-                    row["id"],
-                    nilai
-                ))
+                if simpan:
+                    if has_value:
+                        score_id = int(existing_row["id"].iloc[0])
+                        cursor.execute(
+                            "UPDATE scores SET value=? WHERE id=?",
+                            (nilai, score_id)
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO scores(alternative_id,criteria_id,value) VALUES(?,?,?)",
+                            (alt_id, cid, nilai)
+                        )
+                    conn.commit()
+                    st.success("Tersimpan")
+                    st.rerun()
 
-                conn.commit()
-
-                st.success("Tersimpan")
+                if hapus and has_value:
+                    score_id = int(existing_row["id"].iloc[0])
+                    cursor.execute("DELETE FROM scores WHERE id=?", (score_id,))
+                    conn.commit()
+                    st.success("Nilai dihapus")
+                    st.rerun()
 
 # ==================================
 # SAW
