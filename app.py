@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import hashlib
 
 # Load environmental variables from .env if present
 if os.path.exists(".env"):
@@ -119,6 +120,26 @@ CREATE TABLE IF NOT EXISTS results(
 )
 """)
 
+execute_write("""
+CREATE TABLE IF NOT EXISTS user(
+    id_user INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'admin'
+)
+""")
+
+# Buat akun admin default jika belum ada
+def hash_password(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+existing_admin = read_sql("SELECT COUNT(*) as cnt FROM user WHERE role='admin'")
+if existing_admin["cnt"].iloc[0] == 0:
+    execute_write(
+        "INSERT INTO user(username, password, role) VALUES(%s, %s, %s)",
+        ("admin", hash_password("admin123"), "admin")
+    )
+
 def get_criteria():
     df = read_sql("SELECT * FROM criteria")
     if not df.empty:
@@ -201,10 +222,57 @@ def tampilkan_tabel_ranking(ranking):
     st.markdown(html_table, unsafe_allow_html=True)
 
 # ==================================
+# AUTENTIKASI / LOGIN
+# ==================================
+
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = ""
+
+def do_login(username, password):
+    hashed = hash_password(password)
+    result = read_sql(
+        "SELECT * FROM user WHERE username=%s AND password=%s",
+        (username, hashed)
+    )
+    if not result.empty:
+        st.session_state["logged_in"] = True
+        st.session_state["username"] = username
+        return True
+    return False
+
+if not st.session_state["logged_in"]:
+    st.title("Login")
+    st.markdown("Masuk menggunakan akun admin Anda.")
+
+    with st.form("form_login"):
+        uname = st.text_input("Username")
+        pw    = st.text_input("Password", type="password")
+        login_btn = st.form_submit_button("Login")
+
+        if login_btn:
+            if uname and pw:
+                if do_login(uname, pw):
+                    st.success("Login berhasil!")
+                    st.rerun()
+                else:
+                    st.error("Username atau password salah.")
+            else:
+                st.warning("Username dan password tidak boleh kosong.")
+    st.stop()
+
+# ==================================
 # SIDEBAR
 # ==================================
 
 st.sidebar.title("SPK SAW & TOPSIS")
+st.sidebar.markdown(f"👤 **{st.session_state['username']}**")
+if st.sidebar.button("Logout"):
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = ""
+    st.rerun()
+st.sidebar.divider()
 
 menu = st.sidebar.radio(
     "Menu",
@@ -212,6 +280,7 @@ menu = st.sidebar.radio(
         "Kriteria",
         "Alternatif",
         "Input Nilai",
+        "Perhitungan",
         "SAW",
         "TOPSIS",
         "Riwayat"
@@ -393,6 +462,217 @@ elif menu == "Input Nilai":
                     execute_write("DELETE FROM scores WHERE id=%s", (score_id,))
                     st.success("Nilai dihapus")
                     st.rerun()
+
+# ==================================
+# PERHITUNGAN
+# ==================================
+
+elif menu == "Perhitungan":
+
+    st.title("Langkah-Langkah Perhitungan")
+
+    criteria     = get_criteria()
+    alternatives = get_alternatives()
+    scores       = get_scores()
+
+    if len(criteria) == 0 or len(alternatives) == 0 or len(scores) == 0:
+        st.warning("Lengkapi data Kriteria, Alternatif, dan Nilai terlebih dahulu.")
+    else:
+        # Bangun matriks keputusan
+        matrix = scores.pivot_table(
+            index="alternative_id",
+            columns="criteria_id",
+            values="value",
+            aggfunc="last"
+        )
+
+        # Ganti index/kolom dengan nama agar tabel mudah dibaca
+        alt_map  = dict(zip(alternatives["id"], alternatives["name"]))
+        crit_map = dict(zip(criteria["id"],     criteria["name"]))
+        matrix_display = matrix.rename(index=alt_map, columns=crit_map)
+
+        tab_saw, tab_topsis = st.tabs(["SAW", "TOPSIS"])
+
+        # ──────────────────────────────────────────────
+        # TAB SAW
+        # ──────────────────────────────────────────────
+        with tab_saw:
+            st.header("Metode SAW (Simple Additive Weighting)")
+            st.markdown(
+                "SAW menormalisasi setiap nilai terhadap nilai terbaik pada "
+                "kolom kriteria, lalu mengalikan dengan bobot dan menjumlahkannya."
+            )
+
+            # --- Langkah 1: Matriks Keputusan ---
+            st.subheader("Langkah 1 — Matriks Keputusan (X)")
+            st.dataframe(matrix_display.style.format("{:.4f}"), use_container_width=True)
+
+            # --- Langkah 2: Normalisasi ---
+            st.subheader("Langkah 2 — Normalisasi Matriks (R)")
+            st.markdown(
+                "- **Benefit**: $r_{ij} = \\dfrac{x_{ij}}{\\max_i(x_{ij})}$\n"
+                "- **Cost**   : $r_{ij} = \\dfrac{\\min_i(x_{ij})}{x_{ij}}$"
+            )
+
+            norm = matrix.copy().astype(float)
+            for _, crow in criteria.iterrows():
+                cid = crow["id"]
+                if crow["type"] == "benefit":
+                    norm[cid] = matrix[cid] / matrix[cid].max()
+                else:
+                    norm[cid] = matrix[cid].min() / matrix[cid]
+
+            norm_display = norm.rename(index=alt_map, columns=crit_map)
+            st.dataframe(norm_display.style.format("{:.4f}"), use_container_width=True)
+
+            # Tabel referensi max/min
+            ref_rows = []
+            for _, crow in criteria.iterrows():
+                cid = crow["id"]
+                ref_rows.append({
+                    "Kriteria" : crow["name"],
+                    "Tipe"     : crow["type"],
+                    "Max"      : f"{matrix[cid].max():.4f}",
+                    "Min"      : f"{matrix[cid].min():.4f}",
+                    "Acuan Normalisasi": (
+                        f"max = {matrix[cid].max():.4f}" if crow["type"] == "benefit"
+                        else f"min = {matrix[cid].min():.4f}"
+                    )
+                })
+            st.caption("Nilai acuan normalisasi per kriteria:")
+            st.dataframe(pd.DataFrame(ref_rows), use_container_width=True, hide_index=True)
+
+            # --- Langkah 3: Bobot ---
+            st.subheader("Langkah 3 — Bobot Kriteria (W)")
+            w_df = criteria[["name", "weight", "type"]].copy()
+            w_df.columns = ["Kriteria", "Bobot", "Tipe"]
+            st.dataframe(w_df, use_container_width=True, hide_index=True)
+
+            # --- Langkah 4: Nilai Terbobot ---
+            st.subheader("Langkah 4 — Matriks Terbobot (R × W)")
+            weights      = criteria["weight"].values
+            weighted     = norm * weights
+            weighted_disp = weighted.rename(index=alt_map, columns=crit_map)
+            st.dataframe(weighted_disp.style.format("{:.4f}"), use_container_width=True)
+
+            # --- Langkah 5: Skor Akhir & Ranking ---
+            st.subheader("Langkah 5 — Skor Akhir & Peringkat")
+            st.markdown("$V_i = \\sum_j w_j \\cdot r_{ij}$")
+
+            final_saw = weighted.sum(axis=1)
+            rank_saw  = pd.DataFrame({
+                "Alternatif": [alt_map[i] for i in final_saw.index],
+                "Skor SAW"  : final_saw.values
+            }).sort_values("Skor SAW", ascending=False).reset_index(drop=True)
+            rank_saw.index     += 1
+            rank_saw.index.name = "Peringkat"
+            st.dataframe(rank_saw.style.format({"Skor SAW": "{:.4f}"}), use_container_width=True)
+
+        # ──────────────────────────────────────────────
+        # TAB TOPSIS
+        # ──────────────────────────────────────────────
+        with tab_topsis:
+            st.header("Metode TOPSIS (Technique for Order Preference by Similarity to Ideal Solution)")
+            st.markdown(
+                "TOPSIS memilih alternatif yang jaraknya paling dekat ke solusi ideal positif "
+                "dan paling jauh dari solusi ideal negatif."
+            )
+
+            # --- Langkah 1: Matriks Keputusan ---
+            st.subheader("Langkah 1 — Matriks Keputusan (X)")
+            st.dataframe(matrix_display.style.format("{:.4f}"), use_container_width=True)
+
+            # --- Langkah 2: Normalisasi Vektor ---
+            st.subheader("Langkah 2 — Normalisasi Vektor (R)")
+            st.markdown(
+                "$r_{ij} = \\dfrac{x_{ij}}{\\sqrt{\\sum_i x_{ij}^2}}$"
+            )
+            r = matrix / np.sqrt((matrix ** 2).sum())
+            r_display = r.rename(index=alt_map, columns=crit_map)
+            st.dataframe(r_display.style.format("{:.4f}"), use_container_width=True)
+
+            # Tampilkan pembagi (akar jumlah kuadrat)
+            denom_rows = []
+            for _, crow in criteria.iterrows():
+                cid = crow["id"]
+                denom_rows.append({
+                    "Kriteria"           : crow["name"],
+                    "√Σx²"               : f"{np.sqrt((matrix[cid]**2).sum()):.4f}"
+                })
+            st.caption("Pembagi normalisasi per kriteria (√Σx²):")
+            st.dataframe(pd.DataFrame(denom_rows), use_container_width=True, hide_index=True)
+
+            # --- Langkah 3: Bobot ---
+            st.subheader("Langkah 3 — Bobot Kriteria (W)")
+            st.dataframe(w_df, use_container_width=True, hide_index=True)
+
+            # --- Langkah 4: Matriks Terbobot ---
+            st.subheader("Langkah 4 — Matriks Terbobot (Y = R × W)")
+            st.markdown("$y_{ij} = w_j \\cdot r_{ij}$")
+            y         = r * weights
+            y_display = y.rename(index=alt_map, columns=crit_map)
+            st.dataframe(y_display.style.format("{:.4f}"), use_container_width=True)
+
+            # --- Langkah 5: Solusi Ideal ---
+            st.subheader("Langkah 5 — Solusi Ideal Positif (A⁺) & Negatif (A⁻)")
+            ideal_plus  = []
+            ideal_minus = []
+            for _, crow in criteria.iterrows():
+                cid = crow["id"]
+                if crow["type"] == "benefit":
+                    ideal_plus.append(y[cid].max())
+                    ideal_minus.append(y[cid].min())
+                else:
+                    ideal_plus.append(y[cid].min())
+                    ideal_minus.append(y[cid].max())
+
+            ideal_df = pd.DataFrame({
+                "Kriteria": [crit_map[c] for c in matrix.columns],
+                "Tipe"    : criteria["type"].values,
+                "A⁺ (Ideal Positif)" : [f"{v:.4f}" for v in ideal_plus],
+                "A⁻ (Ideal Negatif)" : [f"{v:.4f}" for v in ideal_minus],
+            })
+            st.dataframe(ideal_df, use_container_width=True, hide_index=True)
+
+            ideal_plus  = np.array(ideal_plus)
+            ideal_minus = np.array(ideal_minus)
+
+            # --- Langkah 6: Jarak ---
+            st.subheader("Langkah 6 — Jarak ke Solusi Ideal")
+            st.markdown(
+                "- $D_i^+ = \\sqrt{\\sum_j (y_{ij} - A_j^+)^2}$\n"
+                "- $D_i^- = \\sqrt{\\sum_j (y_{ij} - A_j^-)^2}$"
+            )
+            d_plus  = np.sqrt(((y - ideal_plus)  ** 2).sum(axis=1))
+            d_minus = np.sqrt(((y - ideal_minus) ** 2).sum(axis=1))
+
+            dist_df = pd.DataFrame({
+                "Alternatif": [alt_map[i] for i in y.index],
+                "D⁺"        : d_plus.values,
+                "D⁻"        : d_minus.values,
+            })
+            st.dataframe(dist_df.style.format({"D⁺": "{:.4f}", "D⁻": "{:.4f}"}),
+                         use_container_width=True, hide_index=True)
+
+            # --- Langkah 7: Nilai Preferensi & Ranking ---
+            st.subheader("Langkah 7 — Nilai Preferensi (V) & Peringkat")
+            st.markdown("$V_i = \\dfrac{D_i^-}{D_i^+ + D_i^-}$")
+
+            pref = d_minus / (d_plus + d_minus)
+            rank_topsis = pd.DataFrame({
+                "Alternatif"      : [alt_map[i] for i in y.index],
+                "D⁺"              : d_plus.values,
+                "D⁻"              : d_minus.values,
+                "Skor TOPSIS (V)" : pref.values,
+            }).sort_values("Skor TOPSIS (V)", ascending=False).reset_index(drop=True)
+            rank_topsis.index      += 1
+            rank_topsis.index.name  = "Peringkat"
+            st.dataframe(
+                rank_topsis.style.format({
+                    "D⁺": "{:.4f}", "D⁻": "{:.4f}", "Skor TOPSIS (V)": "{:.4f}"
+                }),
+                use_container_width=True
+            )
 
 # ==================================
 # SAW
