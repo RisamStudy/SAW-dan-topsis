@@ -511,7 +511,15 @@ elif menu == "Perhitungan":
             st.subheader("Langkah 2 — Normalisasi Matriks (R)")
             st.markdown(
                 "- **Benefit**: $r_{ij} = \\dfrac{x_{ij}}{\\max_i(x_{ij})}$\n"
-                "- **Cost**   : $r_{ij} = \\dfrac{\\min_i(x_{ij})}{x_{ij}}$"
+                "- **Cost**   : $r_{ij} = \\dfrac{\\min_i(x_{ij})}{x_{ij}}$\n\n"
+                "**Keterangan**:\n"
+                "- $r_{ij}$: Nilai normalisasi dari alternatif $i$ pada kriteria $j$\n"
+                "- $x_{ij}$: Nilai asli alternatif $i$ pada kriteria $j$\n"
+                "- $\\max_i(x_{ij})$: Nilai tertinggi dari semua alternatif pada kriteria $j$\n"
+                "- $\\min_i(x_{ij})$: Nilai terendah dari semua alternatif pada kriteria $j$\n\n"
+                "**Cara Membaca**:\n"
+                "- **Benefit**: Nilai normalisasi ($r_{ij}$) diperoleh dengan membagi nilai alternatif tersebut ($x_{ij}$) dengan nilai terbesar dari seluruh alternatif pada kriteria yang sama ($\\max_i(x_{ij})$).\n"
+                "- **Cost**: Nilai normalisasi ($r_{ij}$) diperoleh dengan membagi nilai terkecil dari seluruh alternatif pada kriteria tersebut ($\\min_i(x_{ij})$) dengan nilai alternatif itu sendiri ($x_{ij}$)."
             )
 
             norm = matrix.copy().astype(float)
@@ -542,6 +550,29 @@ elif menu == "Perhitungan":
             st.caption("Nilai acuan normalisasi per kriteria:")
             st.dataframe(pd.DataFrame(ref_rows), use_container_width=True, hide_index=True)
 
+            with st.expander("🔍 Detail Perhitungan Normalisasi SAW (Matriks R)"):
+                for aid, alt_name in alt_map.items():
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    for _, crow in criteria.iterrows():
+                        cid = crow["id"]
+                        cname = crow["name"]
+                        ctype = crow["type"]
+                        val = matrix.loc[aid, cid]
+                        if ctype == "benefit":
+                            cmax = matrix[cid].max()
+                            res = val / cmax
+                            st.markdown(
+                                f"- **{cname}** ({ctype}): "
+                                f"$r_{{\\text{{{alt_name}}}, \\text{{{cname}}}}} = \\dfrac{{{val:.4f}}}{{\\max({', '.join([f'{v:.4f}' for v in matrix[cid]])})}} = \\dfrac{{{val:.4f}}}{{{cmax:.4f}}} = {res:.4f}$"
+                            )
+                        else:
+                            cmin = matrix[cid].min()
+                            res = cmin / val
+                            st.markdown(
+                                f"- **{cname}** ({ctype}): "
+                                f"$r_{{\\text{{{alt_name}}}, \\text{{{cname}}}}} = \\dfrac{{\\min({', '.join([f'{v:.4f}' for v in matrix[cid]])})}}{{{val:.4f}}} = \\dfrac{{{cmin:.4f}}}{{{val:.4f}}} = {res:.4f}$"
+                            )
+
             # --- Langkah 3: Bobot ---
             st.subheader("Langkah 3 — Bobot Kriteria (W)")
             w_df = criteria[["name", "weight", "type"]].copy()
@@ -555,9 +586,30 @@ elif menu == "Perhitungan":
             weighted_disp = weighted.rename(index=alt_map, columns=crit_map)
             st.dataframe(weighted_disp.style.format("{:.4f}"), use_container_width=True)
 
+            with st.expander("🔍 Detail Perhitungan Matriks Terbobot SAW (R × W)"):
+                for aid, alt_name in alt_map.items():
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    for _, crow in criteria.iterrows():
+                        cid = crow["id"]
+                        cname = crow["name"]
+                        w_val = crow["weight"]
+                        r_val = norm.loc[aid, cid]
+                        res = r_val * w_val
+                        st.markdown(
+                            f"- **{cname}**: $y_{{\\text{{{alt_name}}}, \\text{{{cname}}}}} = {r_val:.4f} \\times {w_val:.4f} = {res:.4f}$"
+                        )
+
             # --- Langkah 5: Skor Akhir & Ranking ---
             st.subheader("Langkah 5 — Skor Akhir & Peringkat")
-            st.markdown("$V_i = \\sum_j w_j \\cdot r_{ij}$")
+            st.markdown(
+                "$V_i = \\sum_j w_j \\cdot r_{ij}$\n\n"
+                "**Keterangan**:\n"
+                "- $V_i$: Nilai preferensi atau skor akhir untuk alternatif $i$\n"
+                "- $w_j$: Bobot kepentingan dari kriteria $j$\n"
+                "- $r_{ij}$: Nilai normalisasi alternatif $i$ pada kriteria $j$\n\n"
+                "**Cara Membaca**:\n"
+                "- Skor akhir alternatif $i$ ($V_i$) diperoleh dengan menjumlahkan hasil perkalian bobot kriteria $j$ ($w_j$) dengan nilai hasil normalisasi ($r_{ij}$) kriteria tersebut untuk seluruh kriteria yang ada."
+            )
 
             final_saw = weighted.sum(axis=1)
             rank_saw  = pd.DataFrame({
@@ -567,6 +619,26 @@ elif menu == "Perhitungan":
             rank_saw.index     += 1
             rank_saw.index.name = "Peringkat"
             st.dataframe(rank_saw.style.format({"Skor SAW": "{:.4f}"}), use_container_width=True)
+
+            with st.expander("🔍 Detail Perhitungan Skor Akhir SAW ($V_i$)"):
+                for aid, alt_name in alt_map.items():
+                    terms = []
+                    calc_str = []
+                    for _, crow in criteria.iterrows():
+                        cid = crow["id"]
+                        w_val = crow["weight"]
+                        r_val = norm.loc[aid, cid]
+                        terms.append(f"({w_val:.4f} \\times {r_val:.4f})")
+                        calc_str.append(f"{w_val * r_val:.4f}")
+                    
+                    final_score = weighted.loc[aid].sum()
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    st.markdown(
+                        f"$$V_{{\\text{{{alt_name}}}}} = "
+                        f"{' + '.join(terms)} = "
+                        f"{' + '.join(calc_str)} = "
+                        f"{final_score:.4f}$$"
+                    )
 
         # ──────────────────────────────────────────────
         # TAB TOPSIS
@@ -585,7 +657,13 @@ elif menu == "Perhitungan":
             # --- Langkah 2: Normalisasi Vektor ---
             st.subheader("Langkah 2 — Normalisasi Vektor (R)")
             st.markdown(
-                "$r_{ij} = \\dfrac{x_{ij}}{\\sqrt{\\sum_i x_{ij}^2}}$"
+                "$r_{ij} = \\dfrac{x_{ij}}{\\sqrt{\\sum_i x_{ij}^2}}$\n\n"
+                "**Keterangan**:\n"
+                "- $r_{ij}$: Nilai normalisasi vektor untuk alternatif $i$ pada kriteria $j$\n"
+                "- $x_{ij}$: Nilai asli alternatif $i$ pada kriteria $j$\n"
+                "- $\\sqrt{\\sum_i x_{ij}^2}$: Akar dari jumlah kuadrat seluruh nilai alternatif pada kriteria $j$\n\n"
+                "**Cara Membaca**:\n"
+                "- Nilai normalisasi vektor ($r_{ij}$) diperoleh dengan membagi nilai alternatif ($x_{ij}$) dengan akar dari total penjumlahan kuadrat nilai semua alternatif pada kriteria tersebut."
             )
             r = matrix / np.sqrt((matrix ** 2).sum())
             r_display = r.rename(index=alt_map, columns=crit_map)
@@ -602,19 +680,83 @@ elif menu == "Perhitungan":
             st.caption("Pembagi normalisasi per kriteria (√Σx²):")
             st.dataframe(pd.DataFrame(denom_rows), use_container_width=True, hide_index=True)
 
+            with st.expander("🔍 Detail Perhitungan Normalisasi Vektor TOPSIS (Matriks R)"):
+                st.markdown("**1. Perhitungan Pembagi (Akar Jumlah Kuadrat per Kriteria):**")
+                pembagi_dict = {}
+                for _, crow in criteria.iterrows():
+                    cid = crow["id"]
+                    cname = crow["name"]
+                    vals = matrix[cid].values
+                    vals_sq = [v ** 2 for v in vals]
+                    sum_sq = sum(vals_sq)
+                    denom = np.sqrt(sum_sq)
+                    pembagi_dict[cid] = denom
+                    
+                    sq_terms = [f"{v:.4f}^2" for v in vals]
+                    sq_vals = [f"{v:.4f}" for v in vals_sq]
+                    st.markdown(
+                        f"- Pembagi **{cname}**:  \n"
+                        f"  $\\sqrt{{{ ' + '.join(sq_terms) }}} = \\sqrt{{{ ' + '.join(sq_vals) }}} = \\sqrt{{{sum_sq:.4f}}} = {denom:.4f}$"
+                    )
+                
+                st.markdown("**2. Perhitungan Normalisasi per Alternatif:**")
+                for aid, alt_name in alt_map.items():
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    for _, crow in criteria.iterrows():
+                        cid = crow["id"]
+                        cname = crow["name"]
+                        val = matrix.loc[aid, cid]
+                        denom = pembagi_dict[cid]
+                        res = val / denom
+                        st.markdown(
+                            f"- **{cname}**: $r_{{\\text{{{alt_name}}}, \\text{{{cname}}}}} = \\dfrac{{{val:.4f}}}{{{denom:.4f}}} = {res:.4f}$"
+                        )
+
             # --- Langkah 3: Bobot ---
             st.subheader("Langkah 3 — Bobot Kriteria (W)")
             st.dataframe(w_df, use_container_width=True, hide_index=True)
 
             # --- Langkah 4: Matriks Terbobot ---
             st.subheader("Langkah 4 — Matriks Terbobot (Y = R × W)")
-            st.markdown("$y_{ij} = w_j \\cdot r_{ij}$")
+            st.markdown(
+                "$y_{ij} = w_j \\cdot r_{ij}$\n\n"
+                "**Keterangan**:\n"
+                "- $y_{ij}$: Nilai normalisasi terbobot kriteria $j$ untuk alternatif $i$\n"
+                "- $w_j$: Bobot kepentingan kriteria $j$\n"
+                "- $r_{ij}$: Nilai hasil normalisasi vektor kriteria $j$ untuk alternatif $i$\n\n"
+                "**Cara Membaca**:\n"
+                "- Nilai terbobot ($y_{ij}$) diperoleh dengan mengalikan bobot kriteria ($w_j$) dengan nilai hasil normalisasi vektor ($r_{ij}$) pada kriteria tersebut."
+            )
             y         = r * weights
             y_display = y.rename(index=alt_map, columns=crit_map)
             st.dataframe(y_display.style.format("{:.4f}"), use_container_width=True)
 
+            with st.expander("🔍 Detail Perhitungan Matriks Terbobot TOPSIS (Y = R × W)"):
+                for aid, alt_name in alt_map.items():
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    for _, crow in criteria.iterrows():
+                        cid = crow["id"]
+                        cname = crow["name"]
+                        w_val = crow["weight"]
+                        r_val = r.loc[aid, cid]
+                        res = r_val * w_val
+                        st.markdown(
+                            f"- **{cname}**: $y_{{\\text{{{alt_name}}}, \\text{{{cname}}}}} = {r_val:.4f} \\times {w_val:.4f} = {res:.4f}$"
+                        )
+
             # --- Langkah 5: Solusi Ideal ---
             st.subheader("Langkah 5 — Solusi Ideal Positif (A⁺) & Negatif (A⁻)")
+            st.markdown(
+                "- **Solusi Ideal Positif ($A^+$)**: $A^+ = (y_1^+, y_2^+, \\dots, y_n^+)$ di mana $y_j^+ = \\max_i(y_{ij})$ jika $j$ benefit, atau $\\min_i(y_{ij})$ jika $j$ cost.\n"
+                "- **Solusi Ideal Negatif ($A^-$)**: $A^- = (y_1^-, y_2^-, \\dots, y_n^-)$ di mana $y_j^- = \\min_i(y_{ij})$ jika $j$ benefit, atau $\\max_i(y_{ij})$ jika $j$ cost.\n\n"
+                "**Keterangan**:\n"
+                "- $A^+$: Solusi ideal positif\n"
+                "- $A^-$: Solusi ideal negatif\n"
+                "- $y_{ij}$: Nilai normalisasi terbobot kriteria $j$ untuk alternatif $i$\n\n"
+                "**Cara Membaca**:\n"
+                "- Solusi ideal positif ($A^+$) diperoleh dengan memilih nilai terbobot terbesar (maksimum) untuk kriteria bertipe benefit, dan nilai terbobot terkecil (minimum) untuk kriteria bertipe cost.\n"
+                "- Solusi ideal negatif ($A^-$) diperoleh dengan memilih nilai terbobot terkecil (minimum) untuk kriteria bertipe benefit, dan nilai terbobot terbesar (maksimum) untuk kriteria bertipe cost."
+            )
             ideal_plus  = []
             ideal_minus = []
             for _, crow in criteria.iterrows():
@@ -637,11 +779,44 @@ elif menu == "Perhitungan":
             ideal_plus  = np.array(ideal_plus)
             ideal_minus = np.array(ideal_minus)
 
+            with st.expander("🔍 Detail Penentuan Solusi Ideal (A⁺ & A⁻)"):
+                for _, crow in criteria.iterrows():
+                    cid = crow["id"]
+                    cname = crow["name"]
+                    ctype = crow["type"]
+                    vals = y[cid].values
+                    vals_str = ", ".join([f"{v:.4f}" for v in vals])
+                    if ctype == "benefit":
+                        i_plus = y[cid].max()
+                        i_minus = y[cid].min()
+                        st.markdown(
+                            f"- **{cname}** ({ctype}):  \n"
+                            f"  - $A^+ = \\max(\\{{{vals_str}\\}}) = {i_plus:.4f}$  \n"
+                            f"  - $A^- = \\min(\\{{{vals_str}\\}}) = {i_minus:.4f}$"
+                        )
+                    else:
+                        i_plus = y[cid].min()
+                        i_minus = y[cid].max()
+                        st.markdown(
+                            f"- **{cname}** ({ctype}):  \n"
+                            f"  - $A^+ = \\min(\\{{{vals_str}\\}}) = {i_plus:.4f}$  \n"
+                            f"  - $A^- = \\max(\\{{{vals_str}\\}}) = {i_minus:.4f}$"
+                        )
+
             # --- Langkah 6: Jarak ---
             st.subheader("Langkah 6 — Jarak ke Solusi Ideal")
             st.markdown(
-                "- $D_i^+ = \\sqrt{\\sum_j (y_{ij} - A_j^+)^2}$\n"
-                "- $D_i^- = \\sqrt{\\sum_j (y_{ij} - A_j^-)^2}$"
+                "- **Jarak ke Solusi Ideal Positif ($D_i^+$)**: $D_i^+ = \\sqrt{\\sum_j (y_{ij} - A_j^+)^2}$\n"
+                "- **Jarak ke Solusi Ideal Negatif ($D_i^-$)**: $D_i^- = \\sqrt{\\sum_j (y_{ij} - A_j^-)^2}$\n\n"
+                "**Keterangan**:\n"
+                "- $D_i^+$: Jarak Euclidean alternatif $i$ ke solusi ideal positif\n"
+                "- $D_i^-$: Jarak Euclidean alternatif $i$ ke solusi ideal negatif\n"
+                "- $y_{ij}$: Nilai normalisasi terbobot kriteria $j$ untuk alternatif $i$\n"
+                "- $A_j^+$: Nilai solusi ideal positif kriteria $j$\n"
+                "- $A_j^-$: Nilai solusi ideal negatif kriteria $j$\n\n"
+                "**Cara Membaca**:\n"
+                "- **Jarak Ideal Positif ($D_i^+$)**: Jarak ke solusi ideal positif diperoleh dengan menghitung akar dari jumlah kuadrat selisih antara nilai terbobot alternatif ($y_{ij}$) dan nilai ideal positif ($A_j^+$) di setiap kriteria.\n"
+                "- **Jarak Ideal Negatif ($D_i^-$)**: Jarak ke solusi ideal negatif diperoleh dengan menghitung akar dari jumlah kuadrat selisih antara nilai terbobot alternatif ($y_{ij}$) dan nilai ideal negatif ($A_j^-$) di setiap kriteria."
             )
             d_plus  = np.sqrt(((y - ideal_plus)  ** 2).sum(axis=1))
             d_minus = np.sqrt(((y - ideal_minus) ** 2).sum(axis=1))
@@ -654,9 +829,54 @@ elif menu == "Perhitungan":
             st.dataframe(dist_df.style.format({"D⁺": "{:.4f}", "D⁻": "{:.4f}"}),
                          use_container_width=True, hide_index=True)
 
+            with st.expander("🔍 Detail Perhitungan Jarak ke Solusi Ideal (D⁺ & D⁻)"):
+                crit_ids = list(matrix.columns)
+                for aid, alt_name in alt_map.items():
+                    st.markdown(f"**Alternatif {alt_name}:**")
+                    
+                    # D+
+                    terms_plus = []
+                    calc_plus = []
+                    # D-
+                    terms_minus = []
+                    calc_minus = []
+                    
+                    for idx, cid in enumerate(crit_ids):
+                        y_val = y.loc[aid, cid]
+                        a_plus = ideal_plus[idx]
+                        a_minus = ideal_minus[idx]
+                        
+                        terms_plus.append(f"({y_val:.4f} - {a_plus:.4f})^2")
+                        calc_plus.append(f"({y_val - a_plus:.4f})^2")
+                        
+                        terms_minus.append(f"({y_val:.4f} - {a_minus:.4f})^2")
+                        calc_minus.append(f"({y_val - a_minus:.4f})^2")
+                    
+                    sum_plus = sum([(y.loc[aid, cid] - ideal_plus[idx])**2 for idx, cid in enumerate(crit_ids)])
+                    sum_minus = sum([(y.loc[aid, cid] - ideal_minus[idx])**2 for idx, cid in enumerate(crit_ids)])
+                    
+                    st.markdown(
+                        f"- **Jarak Positif ($D_i^+$):**  \n"
+                        f"  $D^+_{{\\text{{{alt_name}}}}} = \\sqrt{{{ ' + '.join(terms_plus) }}}$  \n"
+                        f"  $D^+_{{\\text{{{alt_name}}}}} = \\sqrt{{{ ' + '.join(calc_plus) }}} = \\sqrt{{{sum_plus:.4f}}} = {d_plus.loc[aid]:.4f}$"
+                    )
+                    st.markdown(
+                        f"- **Jarak Negatif ($D_i^-$):**  \n"
+                        f"  $D^-_{{\\text{{{alt_name}}}}} = \\sqrt{{{ ' + '.join(terms_minus) }}}$  \n"
+                        f"  $D^-_{{\\text{{{alt_name}}}}} = \\sqrt{{{ ' + '.join(calc_minus) }}} = \\sqrt{{{sum_minus:.4f}}} = {d_minus.loc[aid]:.4f}$"
+                    )
+
             # --- Langkah 7: Nilai Preferensi & Ranking ---
             st.subheader("Langkah 7 — Nilai Preferensi (V) & Peringkat")
-            st.markdown("$V_i = \\dfrac{D_i^-}{D_i^+ + D_i^-}$")
+            st.markdown(
+                "$V_i = \\dfrac{D_i^-}{D_i^+ + D_i^-}$\n\n"
+                "**Keterangan**:\n"
+                "- $V_i$: Nilai preferensi akhir atau kedekatan relatif alternatif $i$ terhadap solusi ideal\n"
+                "- $D_i^+$: Jarak alternatif $i$ ke solusi ideal positif\n"
+                "- $D_i^-$: Jarak alternatif $i$ ke solusi ideal negatif\n\n"
+                "**Cara Membaca**:\n"
+                "- Nilai preferensi akhir ($V_i$) diperoleh dengan membagi jarak ke solusi ideal negatif ($D_i^-$) dengan total penjumlahan jarak ke solusi ideal positif ($D_i^+$) dan jarak ke solusi ideal negatif ($D_i^-$)."
+            )
 
             pref = d_minus / (d_plus + d_minus)
             rank_topsis = pd.DataFrame({
@@ -673,6 +893,16 @@ elif menu == "Perhitungan":
                 }),
                 use_container_width=True
             )
+
+            with st.expander("🔍 Detail Perhitungan Nilai Preferensi TOPSIS ($V_i$)"):
+                for aid, alt_name in alt_map.items():
+                    dp = d_plus.loc[aid]
+                    dm = d_minus.loc[aid]
+                    vi = pref.loc[aid]
+                    st.markdown(
+                        f"**Alternatif {alt_name}:**  \n"
+                        f"$$V_{{\\text{{{alt_name}}}}} = \\dfrac{{{dm:.4f}}}{{{dp:.4f} + {dm:.4f}}} = \\dfrac{{{dm:.4f}}}{{{dp + dm:.4f}}} = {vi:.4f}$$"
+                    )
 
 # ==================================
 # SAW
